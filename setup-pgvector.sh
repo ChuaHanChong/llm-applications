@@ -8,7 +8,7 @@ sudo apt update && sudo apt install -y postgresql postgresql-contrib
 sudo apt install -y postgresql-server-dev-16
 pushd /tmp && git clone --branch v0.4.4 https://github.com/pgvector/pgvector.git && pushd pgvector && make && sudo make install && popd && popd
 # Activate pgvector and the database
-echo 'ray ALL=(ALL:ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers
+# echo 'ray ALL=(ALL:ALL) NOPASSWD:ALL' | sudo tee -a /etc/sudoers
 sudo service postgresql start
 # pragma: allowlist nextline secret
 sudo -u postgres psql -c "ALTER USER postgres with password 'postgres';"

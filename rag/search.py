@@ -15,7 +15,10 @@ def semantic_search(query, embedding_model, k):
                 (embedding, k),
             )
             rows = cur.fetchall()
-            semantic_context = [{"id": row[0], "text": row[1], "source": row[2]} for row in rows]
+            semantic_context = [
+                {"id": row[0], "text": row[1], "source": row[2], "metadata": row[-1]}
+                for row in rows
+            ]
     return semantic_context
 
 
