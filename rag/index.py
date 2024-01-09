@@ -49,7 +49,9 @@ def build_or_load_index(
     embedding_model_name, embedding_dim, chunk_size, chunk_overlap, docs_dir=None, sql_dump_fp=None
 ):
     # Drop current Vector DB and prepare for new one
-    execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -c "DROP TABLE IF EXISTS document;"')
+    execute_bash(
+        f'psql "{os.environ["DB_CONNECTION_STRING"]}" -c "DROP TABLE IF EXISTS document;"'
+    )
     execute_bash(f"sudo -u postgres psql -f {ROOT_DIR}/migrations/vector-{embedding_dim}.sql")
     if not sql_dump_fp:
         sql_dump_fp = Path(
@@ -63,39 +65,40 @@ def build_or_load_index(
         execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -f {sql_dump_fp}')
     else:  # Create new index
         # Sections
-        #ds = ray.data.from_items(
+        # ds = ray.data.from_items(
         #    [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()]
-        #)
-        #sections_ds = ds.flat_map(extract_sections)
+        # )
+        # sections_ds = ds.flat_map(extract_sections)
 
         # Create chunks dataset
-        #chunks_ds = sections_ds.flat_map(
+        # chunks_ds = sections_ds.flat_map(
         #    partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-        #)
+        # )
 
         # Embed chunks
-        #embedded_chunks = chunks_ds.map_batches(
+        # embedded_chunks = chunks_ds.map_batches(
         #    EmbedChunks,
         #    fn_constructor_kwargs={"model_name": embedding_model_name},
         #    batch_size=100,
         #    num_gpus=1,
         #    compute=ActorPoolStrategy(size=1),
-        #)
+        # )
 
         # Index data
-        #embedded_chunks.map_batches(
+        # embedded_chunks.map_batches(
         #    StoreResults,
         #    batch_size=128,
         #    num_cpus=1,
         #    compute=ActorPoolStrategy(size=6),
-        #).count()
-        
+        # ).count()
+
         ds = [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()][:2]
         sections_ds = [section for sections in map(extract_sections, ds) for section in sections]
         chunks_ds = [
             chunk
             for chunks in map(
-                partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap), sections_ds
+                partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap),
+                sections_ds,
             )
             for chunk in chunks
         ]
