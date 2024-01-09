@@ -63,10 +63,10 @@ def build_or_load_index(
         execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -f {sql_dump_fp}')
     else:  # Create new index
         # Sections
-        ds = ray.data.from_items(
-            [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()]
-        )
-        sections_ds = ds.flat_map(extract_sections)
+        #ds = ray.data.from_items(
+        #    [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()]
+        #)
+        #sections_ds = ds.flat_map(extract_sections)
 
         # Create chunks dataset
         #chunks_ds = sections_ds.flat_map(
