@@ -4,30 +4,30 @@ import re
 import time
 from pathlib import Path
 
-import openai
 from IPython.display import JSON, clear_output, display
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
 
 from rag.config import EFS_DIR, ROOT_DIR
 from rag.embed import get_embedding_model
-from rag.index import build_index
+from rag.index import build_or_load_index
 from rag.rerank import custom_predict, get_reranked_indices
 from rag.search import lexical_search, semantic_search
-from rag.utils import get_credentials, get_num_tokens, trim
+from rag.utils import get_client, get_num_tokens, trim
 
 
-def response_stream(response):
-    for chunk in response:
-        if "content" in chunk["choices"][0]["delta"].keys():
-            yield chunk["choices"][0]["delta"]["content"]
+def response_stream(chat_completion):
+    for chunk in chat_completion:
+        content = chunk.choices[0].delta.content
+        if content is not None:
+            yield content
 
 
-def prepare_response(response, stream):
+def prepare_response(chat_completion, stream):
     if stream:
-        return response_stream(response)
+        return response_stream(chat_completion)
     else:
-        return response["choices"][-1]["message"]["content"]
+        return chat_completion.choices[0].message.content
 
 
 def generate_response(
@@ -43,23 +43,26 @@ def generate_response(
 ):
     """Generate response from an LLM."""
     retry_count = 0
-    api_base, api_key = get_credentials(llm=llm)
+    client = get_client(llm=llm)
+    messages = [
+        {"role": role, "content": content}
+        for role, content in [
+            ("system", system_content),
+            ("assistant", assistant_content),
+            ("user", user_content),
+        ]
+        if content
+    ]
     while retry_count <= max_retries:
         try:
-            response = openai.ChatCompletion.create(
+            chat_completion = client.chat.completions.create(
                 model=llm,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 stream=stream,
-                api_base=api_base,
-                api_key=api_key,
-                messages=[
-                    {"role": "system", "content": system_content},
-                    {"role": "assistant", "content": assistant_content},
-                    {"role": "user", "content": user_content},
-                ],
+                messages=messages,
             )
-            return prepare_response(response=response, stream=stream)
+            return prepare_response(chat_completion, stream=stream)
 
         except Exception as e:
             print(f"Exception: {e}")
@@ -114,7 +117,7 @@ class QueryAgent:
         query,
         num_chunks=5,
         lexical_search_k=1,
-        rerank_threshold=0.3,
+        rerank_threshold=0.2,
         rerank_k=7,
         stream=True,
     ):
@@ -189,6 +192,7 @@ def generate_responses(
     chunk_overlap,
     num_chunks,
     embedding_model_name,
+    embedding_dim,
     use_lexical_search,
     lexical_search_k,
     use_reranking,
@@ -206,8 +210,9 @@ def generate_responses(
     sql_dump_fp=None,
 ):
     # Build index
-    chunks = build_index(
+    chunks = build_or_load_index(
         embedding_model_name=embedding_model_name,
+        embedding_dim=embedding_dim,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         docs_dir=docs_dir,

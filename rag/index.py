@@ -6,7 +6,7 @@ import psycopg
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pgvector.psycopg import register_vector
 
-from rag.config import EFS_DIR, EMBEDDING_DIMENSIONS, ROOT_DIR
+from rag.config import EFS_DIR, ROOT_DIR
 from rag.data import extract_sections
 from rag.embed import EmbedChunks
 from rag.utils import execute_bash
@@ -45,14 +45,12 @@ def chunk_section(section, chunk_size, chunk_overlap):
     return [{"text": chunk.page_content, "source": chunk.metadata["source"]} for chunk in chunks]
 
 
-def build_index(embedding_model_name, chunk_size, chunk_overlap, docs_dir, sql_dump_fp=None):
+def build_or_load_index(
+    embedding_model_name, embedding_dim, chunk_size, chunk_overlap, docs_dir=None, sql_dump_fp=None
+):
     # Drop current Vector DB and prepare for new one
-    execute_bash(
-        f'psql "{os.environ["DB_CONNECTION_STRING"]}" -c "DROP TABLE IF EXISTS document;"'
-    )
-    execute_bash(
-        f"sudo -u postgres psql -f {ROOT_DIR}/migrations/vector-{EMBEDDING_DIMENSIONS[embedding_model_name]}.sql"
-    )
+    execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -c "DROP TABLE IF EXISTS document;"')
+    execute_bash(f"sudo -u postgres psql -f {ROOT_DIR}/migrations/vector-{embedding_dim}.sql")
     if not sql_dump_fp:
         sql_dump_fp = Path(
             EFS_DIR,
@@ -61,64 +59,62 @@ def build_index(embedding_model_name, chunk_size, chunk_overlap, docs_dir, sql_d
         )
 
     # Vector DB
-    # if SQL_DUMP_FP.exists():  # Load from SQL dump
-    #     execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -f {SQL_DUMP_FP}')
-    # else:  # Create new index
-    # Sections
-    ds = [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()][:2]
-    sections_ds = [section for sections in map(extract_sections, ds) for section in sections]
-    chunks_ds = [
-        chunk
-        for chunks in map(
-            partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap), sections_ds
+    if sql_dump_fp.exists():  # Load from SQL dump
+        execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -f {sql_dump_fp}')
+    else:  # Create new index
+        # Sections
+        ds = ray.data.from_items(
+            [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()]
         )
-        for chunk in chunks
-    ]
+        sections_ds = ds.flat_map(extract_sections)
 
-    embedder = EmbedChunks(model_name=embedding_model_name)
-    store_results = StoreResults()
+        # Create chunks dataset
+        #chunks_ds = sections_ds.flat_map(
+        #    partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        #)
 
-    batch_size = 10
-    for i in range(len(chunks_ds) // batch_size):
-        batch = {"text": [], "source": []}
-        for chunk in chunks_ds[i * batch_size : (i + 1) * batch_size]:
-            batch["text"].append(chunk["text"])
-            batch["source"].append(chunk["source"])
+        # Embed chunks
+        #embedded_chunks = chunks_ds.map_batches(
+        #    EmbedChunks,
+        #    fn_constructor_kwargs={"model_name": embedding_model_name},
+        #    batch_size=100,
+        #    num_gpus=1,
+        #    compute=ActorPoolStrategy(size=1),
+        #)
 
-        embed_batch = embedder(batch)
-        store_results(embed_batch)
+        # Index data
+        #embedded_chunks.map_batches(
+        #    StoreResults,
+        #    batch_size=128,
+        #    num_cpus=1,
+        #    compute=ActorPoolStrategy(size=6),
+        #).count()
+        
+        ds = [{"path": path} for path in docs_dir.rglob("*.html") if not path.is_dir()][:2]
+        sections_ds = [section for sections in map(extract_sections, ds) for section in sections]
+        chunks_ds = [
+            chunk
+            for chunks in map(
+                partial(chunk_section, chunk_size=chunk_size, chunk_overlap=chunk_overlap), sections_ds
+            )
+            for chunk in chunks
+        ]
 
-    # Save to SQL dump
-    execute_bash(f"sudo -u postgres pg_dump -c > {sql_dump_fp}")
+        embedder = EmbedChunks(model_name=embedding_model_name)
+        store_results = StoreResults()
 
-    # Chunks
-    with psycopg.connect(os.environ["DB_CONNECTION_STRING"]) as conn:
-        register_vector(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, text, source FROM document")
-            chunks = cur.fetchall()
-    return chunks
+        batch_size = 10
+        for i in range(len(chunks_ds) // batch_size):
+            batch = {"text": [], "source": []}
+            for chunk in chunks_ds[i * batch_size : (i + 1) * batch_size]:
+                batch["text"].append(chunk["text"])
+                batch["source"].append(chunk["source"])
 
+            embed_batch = embedder(batch)
+            store_results(embed_batch)
 
-def load_index(embedding_model_name, chunk_size, chunk_overlap):
-    # Drop current Vector DB and prepare for new one
-    execute_bash(
-        f'psql "{os.environ["DB_CONNECTION_STRING"]}" -c "DROP TABLE IF EXISTS document;"'
-    )
-    execute_bash(
-        f"sudo -u postgres psql -f {ROOT_DIR}/migrations/vector-{EMBEDDING_DIMENSIONS[embedding_model_name]}.sql"
-    )
-    SQL_DUMP_FP = Path(
-        EFS_DIR,
-        "sql_dumps",
-        f"{embedding_model_name.split('/')[-1]}_{chunk_size}_{chunk_overlap}.sql",
-    )
-
-    # Load vector DB
-    if SQL_DUMP_FP.exists():  # Load from SQL dump
-        execute_bash(f'psql "{os.environ["DB_CONNECTION_STRING"]}" -f {SQL_DUMP_FP}')
-    else:
-        raise Exception(f"{SQL_DUMP_FP} does not exist!")
+        # Save to SQL dump
+        execute_bash(f"sudo -u postgres pg_dump -c > {sql_dump_fp}")
 
     # Chunks
     with psycopg.connect(os.environ["DB_CONNECTION_STRING"]) as conn:

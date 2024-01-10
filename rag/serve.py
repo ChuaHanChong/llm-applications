@@ -18,9 +18,9 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from starlette.responses import StreamingResponse
 
-from rag.config import EFS_DIR, MAX_CONTEXT_LENGTHS
+from rag.config import EMBEDDING_DIMENSIONS, MAX_CONTEXT_LENGTHS
 from rag.generate import QueryAgent
-from rag.index import load_index
+from rag.index import build_or_load_index
 
 app = FastAPI()
 
@@ -85,12 +85,14 @@ class RayAssistantDeployment:
         chunk_overlap,
         num_chunks,
         embedding_model_name,
+        embedding_dim,
         use_lexical_search,
         lexical_search_k,
         use_reranking,
         rerank_threshold,
         rerank_k,
         llm,
+        sql_dump_fp=None,
         run_slack=False,
     ):
         # Configure logging
@@ -114,10 +116,12 @@ class RayAssistantDeployment:
         os.environ["DB_CONNECTION_STRING"] = get_secret("DB_CONNECTION_STRING")
 
         # Set up
-        chunks = load_index(
+        chunks = build_or_load_index(
             embedding_model_name=embedding_model_name,
+            embedding_dim=embedding_dim,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            sql_dump_fp=sql_dump_fp,
         )
 
         # Lexical index
@@ -132,13 +136,17 @@ class RayAssistantDeployment:
         self.rerank_threshold = rerank_threshold
         self.rerank_k = rerank_k
         if use_reranking:
-            reranker_fp = Path(EFS_DIR, "reranker.pkl")
+            reranker_fp = Path(os.environ["RAY_ASSISTANT_RERANKER_MODEL"])
             with open(reranker_fp, "rb") as file:
                 reranker = pickle.load(file)
 
         # Query agent
         self.num_chunks = num_chunks
-        system_content = "Answer the query using the context provided. Be succint."
+        system_content = (
+            "Answer the query using the context provided. Be succinct. "
+            "Contexts are organized in a list of dictionaries [{'text': <context>}, {'text': <context>}, ...]. "
+            "Feel free to ignore any contexts in the list that don't seem relevant to the query. "
+        )
         self.oss_agent = QueryAgent(
             embedding_model_name=embedding_model_name,
             chunks=chunks,
@@ -159,7 +167,7 @@ class RayAssistantDeployment:
         )
 
         # Router
-        router_fp = Path(EFS_DIR, "router.pkl")
+        router_fp = Path(os.environ["RAY_ASSISTANT_ROUTER_MODEL"])
         with open(router_fp, "rb") as file:
             self.router = pickle.load(file)
 
@@ -177,7 +185,7 @@ class RayAssistantDeployment:
             lexical_search_k=self.lexical_search_k,
             rerank_threshold=self.rerank_threshold,
             rerank_k=self.rerank_k,
-            stream=False,
+            stream=stream,
         )
         return result
 
@@ -215,7 +223,32 @@ class RayAssistantDeployment:
 
 # Deploy the Ray Serve app
 deployment = RayAssistantDeployment.bind(
-    num_chunks=5,
-    embedding_model_name="thenlper/gte-large",
-    llm="meta-llama/Llama-2-70b-chat-hf",
+    chunk_size=700,
+    chunk_overlap=50,
+    num_chunks=30,
+    embedding_model_name=os.environ["RAY_ASSISTANT_EMBEDDING_MODEL"],
+    embedding_dim=EMBEDDING_DIMENSIONS["thenlper/gte-large"],
+    use_lexical_search=True,
+    lexical_search_k=1,
+    use_reranking=True,
+    rerank_threshold=0.9,
+    rerank_k=13,
+    llm="mistralai/Mixtral-8x7B-Instruct-v0.1",
+    sql_dump_fp=Path(os.environ["RAY_ASSISTANT_INDEX"]),
 )
+
+
+# Simpler, non-fine-tuned version
+# deployment = RayAssistantDeployment.bind(
+#     chunk_size=700,
+#     chunk_overlap=50,
+#     num_chunks=30,
+#     embedding_model_name="thenlper/gte-large",  # fine-tuned is slightly better
+#     embedding_dim=EMBEDDING_DIMENSIONS["thenlper/gte-large"],
+#     use_lexical_search=True,
+#     lexical_search_k=1,
+#     use_reranking=True,
+#     rerank_threshold=0.9,
+#     rerank_k=13,
+#     llm="mistralai/Mixtral-8x7B-Instruct-v0.1",
+# )
