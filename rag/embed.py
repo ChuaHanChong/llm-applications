@@ -1,6 +1,6 @@
 import os
 
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_community.embeddings import OpenAIEmbeddings
 from langchain.embeddings.huggingface import HuggingFaceEmbeddings
 
 
@@ -31,4 +31,9 @@ class EmbedChunks:
 
     def __call__(self, batch):
         embeddings = self.embedding_model.embed_documents(batch["text"])
-        return {"text": batch["text"], "source": batch["source"], "embeddings": embeddings}
+        return {
+            "text": batch["text"],
+            "source": batch["source"],
+            "metadata": batch["metadata"],
+            "embeddings": embeddings,
+        }

@@ -147,9 +147,22 @@ class QueryAgent:
 
         # Generate response
         document_ids = [item["id"] for item in context_results]
-        context = [item["text"] for item in context_results]
+        context = [item["text"].replace("\n", "") for item in context_results]
         sources = [item["source"] for item in context_results]
-        user_content = f"query: {query}, context: {context}"
+        metadata = [item["metadata"] for item in context_results]
+        # user_content = f"query: {query}, context: {context}"
+        user_content = (
+            f"Please answer the query, '{query}' using only the context provided within the triple backticks.\n"
+            + "```\n"
+            + "\n".join(
+                [
+                    f"Context {i}:\n\tID: {_id}\n\tContent: {text}"
+                    for i, (_id, text) in enumerate(zip(document_ids, context), 1)
+                ]
+            )
+            + "\n```"
+        )
+
         answer = generate_response(
             llm=self.llm,
             max_tokens=self.max_tokens,
@@ -165,6 +178,7 @@ class QueryAgent:
             "question": query,
             "sources": sources,
             "document_ids": document_ids,
+            "metadata": metadata,
             "answer": answer,
             "llm": self.llm,
         }
